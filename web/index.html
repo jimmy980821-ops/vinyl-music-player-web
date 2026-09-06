@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14110e">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="可安裝到主畫面的復古黑膠 YouTube 播放器。">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Vinyl Music">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>Vinyl Music Player</title>
+</head>
+<body>
+  <header class="app-bar">
+    <div>
+      <h1>Vinyl Music Player</h1>
+      <p id="connection-status" role="status" aria-live="polite" aria-atomic="true">準備播放器</p>
+    </div>
+    <div class="header-actions">
+      <button class="icon-button" id="install-button" type="button" aria-label="安裝到主畫面" title="安裝到主畫面">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
+      </button>
+      <button class="icon-button" id="add-button" type="button" aria-label="加入 YouTube 影片" title="加入 YouTube 影片">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4M11 8v6M8 11h6"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="player-shell">
+    <section class="broadcast-panel" aria-labelledby="broadcast-title">
+      <div class="section-heading">
+        <h2 id="broadcast-title">YouTube 播放器</h2>
+        <span class="status-badge" id="player-status" aria-hidden="true">載入中</span>
+      </div>
+      <div class="video-frame" id="video-frame">
+        <div id="youtube-player"></div>
+      </div>
+      <p class="policy-note">影片保持可見並保留 YouTube 原生控制，不下載或分離音訊。</p>
+    </section>
+
+    <section class="listening-console" aria-labelledby="track-title">
+      <div class="track-info">
+        <p class="queue-position" id="queue-position">DEMO 1 / 3</p>
+        <h2 id="track-title">IFrame Player API Demo</h2>
+        <p id="track-artist">Google for Developers</p>
+      </div>
+
+      <div class="turntable" id="turntable">
+        <div class="record-wrap">
+          <div class="record" id="record" role="img" aria-label="目前停止的黑膠唱片">
+            <img id="artwork" src="https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg" alt="目前歌曲封面">
+            <span class="spindle" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="tonearm" id="tonearm" role="slider" tabindex="0" aria-label="唱針位置" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0" aria-valuetext="休息位置">
+          <span class="tonearm-pivot" aria-hidden="true"></span>
+          <span class="tonearm-shaft" aria-hidden="true"><span class="cartridge"></span></span>
+        </div>
+      </div>
+
+      <div class="progress-group">
+        <label class="sr-only" for="progress">播放進度</label>
+        <input id="progress" type="range" min="0" max="1" value="0" step="0.1" disabled>
+        <div class="time-row"><time id="elapsed">0:00</time><time id="duration">0:00</time></div>
+      </div>
+
+      <div class="transport" aria-label="播放控制">
+        <button class="transport-button" id="previous-button" type="button" aria-label="上一首">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M19 6 9 12l10 6Z"/></svg>
+        </button>
+        <button class="play-button" id="play-button" type="button" aria-label="播放" disabled>
+          <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>
+          <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+        </button>
+        <button class="transport-button" id="next-button" type="button" aria-label="下一首">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M5 6l10 6-10 6Z"/></svg>
+        </button>
+      </div>
+
+      <div class="queue" aria-labelledby="queue-title">
+        <div class="queue-header"><h3 id="queue-title">播放佇列</h3><span id="queue-count">3 首</span></div>
+        <ol id="queue-list"></ol>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="add-dialog">
+    <form method="dialog" id="add-form">
+      <div class="dialog-heading">
+        <h2>加入 YouTube 影片</h2>
+        <button class="icon-button" value="cancel" aria-label="關閉" type="submit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <label for="video-url">YouTube 網址或 Video ID</label>
+      <input id="video-url" name="video-url" type="text" autocomplete="off" placeholder="https://youtu.be/…" required>
+      <label for="video-title">歌曲名稱（選填）</label>
+      <input id="video-title" name="video-title" type="text" autocomplete="off" placeholder="YouTube 影片">
+      <p class="form-error" id="form-error" role="alert"></p>
+      <button class="primary-button" id="confirm-add" value="default" type="submit">加入並播放</button>
+    </form>
+  </dialog>
+
+  <dialog id="install-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <h2>加入主畫面</h2>
+        <button class="icon-button" value="close" aria-label="關閉" type="submit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p>iPhone／iPad：點 Safari 的分享按鈕，再選「加入主畫面」。</p>
+      <p>桌面 Chrome／Edge：從網址列或瀏覽器選單選擇「安裝應用程式」。</p>
+      <button class="primary-button" value="close" type="submit">知道了</button>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>
