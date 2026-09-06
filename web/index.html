@@ -25,7 +25,7 @@
       <button class="icon-button" id="install-button" type="button" aria-label="安裝到主畫面" title="安裝到主畫面">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
       </button>
-      <button class="icon-button" id="add-button" type="button" aria-label="加入 YouTube 影片" title="加入 YouTube 影片">
+      <button class="icon-button" id="add-button" type="button" aria-label="加入單曲或播放清單" title="加入單曲或播放清單">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4M11 8v6M8 11h6"/></svg>
       </button>
     </div>
@@ -41,6 +41,10 @@
         <div id="youtube-player"></div>
       </div>
       <p class="policy-note">影片保持可見並保留 YouTube 原生控制，不下載或分離音訊。</p>
+      <label class="keep-awake-control" for="keep-awake">
+        <input id="keep-awake" type="checkbox" checked>
+        <span><strong>播放時保持螢幕亮著</strong><small id="keep-awake-note">避免 iPhone 自動鎖定，手動鎖屏仍會暫停。</small></span>
+      </label>
     </section>
 
     <section class="listening-console" aria-labelledby="track-title">
@@ -92,14 +96,15 @@
   <dialog id="add-dialog">
     <form method="dialog" id="add-form">
       <div class="dialog-heading">
-        <h2>加入 YouTube 影片</h2>
+        <h2>加入音樂</h2>
         <button class="icon-button" value="cancel" aria-label="關閉" type="submit">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
         </button>
       </div>
-      <label for="video-url">YouTube 網址或 Video ID</label>
-      <input id="video-url" name="video-url" type="text" autocomplete="off" placeholder="https://youtu.be/…" required>
-      <label for="video-title">歌曲名稱（選填）</label>
+      <label for="video-url">YouTube 單曲或播放清單網址</label>
+      <input id="video-url" name="video-url" type="text" inputmode="url" autocomplete="off" placeholder="https://music.youtube.com/playlist?list=…" required aria-describedby="url-helper">
+      <p class="form-helper" id="url-helper">播放清單只需貼一次，之後會自動接續播放。</p>
+      <label for="video-title">單曲名稱（選填）</label>
       <input id="video-title" name="video-title" type="text" autocomplete="off" placeholder="YouTube 影片">
       <p class="form-error" id="form-error" role="alert"></p>
       <button class="primary-button" id="confirm-add" value="default" type="submit">加入並播放</button>

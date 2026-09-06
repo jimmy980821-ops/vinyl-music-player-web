@@ -19,8 +19,16 @@ python -m http.server 8080
 - Android Chrome：選單 → 安裝應用程式。
 - 桌面 Chrome／Edge：網址列的安裝圖示或選單 → 安裝應用程式。
 
+## 播放單曲或播放清單
+
+- 貼上 YouTube 單曲網址可加入一首歌曲。
+- 貼上公開或不公開的 YouTube／YouTube Music 播放清單網址，可由官方嵌入播放器接續播放整份清單。
+- 播放時預設使用 Screen Wake Lock 保持螢幕亮著，可在播放器下方關閉。
+
 ## 限制
 
-- 公開靜態網站不應放置 YouTube Data API Key，因此新增歌曲採貼上 YouTube 網址或 Video ID。
+- 公開靜態網站不應放置 YouTube Data API Key，因此新增內容採貼上單曲或播放清單網址。
+- 私人播放清單、個人推薦與需要登入的 YouTube Music 內容可能無法在嵌入播放器中使用。
+- 保持亮屏可以避免自動鎖定，但使用者手動鎖屏後，iOS 仍可能暫停網頁播放器。
 - 離開頁面、切到背景，或讓 YouTube 播放器離開可視範圍時會暫停。
 - 離線快取只包含 App 外殼；YouTube 影片仍需要網路。

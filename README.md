@@ -8,7 +8,7 @@ The recommended version is now the dependency-free static PWA in `web/`. It depl
 
 After pushing to GitHub, open **Settings → Pages → Build and deployment → Source → GitHub Actions**. The checked-in `pages.yml` workflow validates and publishes `web/` on every push to `main`.
 
-Because a public static website cannot safely contain a YouTube Data API key, the web version adds tracks by YouTube URL or Video ID. The native iOS source remains available for future development.
+Because a public static website cannot safely contain a YouTube Data API key, the web version accepts YouTube video URLs and public or unlisted YouTube／YouTube Music playlist URLs. Playlist playback uses the official embedded-player queue. The native iOS source remains available for future development.
 
 > This app does not directly control the YouTube Music iOS application. Playback is provided through an embedded YouTube player where permitted.
 

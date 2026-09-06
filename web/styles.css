@@ -77,9 +77,15 @@ button:focus-visible, input:focus-visible, [role="slider"]:focus-visible {
 .section-heading { margin-bottom: 11px; }
 .section-heading h2, .queue-header h3 { margin: 0; font-size: .9rem; letter-spacing: -.01em; }
 .status-badge { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
-.video-frame { width: 100%; aspect-ratio: 16/9; min-height: 200px; overflow: hidden; border-radius: var(--radius-md); background: #000; }
+.video-frame { width: 100%; aspect-ratio: 16/9; min-height: 200px; overflow: hidden; border-radius: var(--radius-md); background: #050504; }
 .video-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
 .policy-note { margin: 10px 2px 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.keep-awake-control { margin: 12px 2px 0; padding-top: 12px; display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; border-top: 1px solid rgba(255,255,255,.09); cursor: pointer; }
+.keep-awake-control input { width: 19px; height: 19px; margin: 1px 0 0; accent-color: var(--copper); }
+.keep-awake-control strong, .keep-awake-control small { display: block; }
+.keep-awake-control strong { font-size: .82rem; }
+.keep-awake-control small { margin-top: 3px; color: var(--muted); font-size: .74rem; line-height: 1.4; }
+.keep-awake-control.is-unsupported { opacity: .58; cursor: not-allowed; }
 
 .listening-console { padding: clamp(18px, 4vw, 30px); overflow: hidden; }
 .track-info { text-align: center; min-height: 74px; }
@@ -93,7 +99,7 @@ button:focus-visible, input:focus-visible, [role="slider"]:focus-visible {
   position: absolute; inset: 0; border-radius: 50%;
   background:
     linear-gradient(112deg, transparent 34%, rgba(255,255,255,.10) 43%, transparent 51%),
-    repeating-radial-gradient(circle, var(--lacquer, #000) 0 3px, var(--surface) 4px 5px, var(--lacquer, #000) 6px 8px);
+    repeating-radial-gradient(circle, var(--lacquer, #050504) 0 3px, var(--surface) 4px 5px, var(--lacquer, #050504) 6px 8px);
   box-shadow: inset 0 0 0 2px rgba(255,255,255,.08), inset 0 0 44px rgba(255,255,255,.04);
   transform: rotate(var(--record-angle, 0deg));
   will-change: transform;
@@ -139,6 +145,7 @@ input[type="range"]:disabled { cursor: wait; opacity: .5; }
 .queue-title strong { font-size: .88rem; }
 .queue-title span { margin-top: 2px; color: var(--muted); font-size: .76rem; }
 .queue-now { width: 8px; height: 8px; border-radius: 50%; background: var(--copper); }
+.queue-empty { padding: 14px 9px; color: var(--muted); font-size: .82rem; }
 
 dialog { width: min(92vw, 430px); border: 0; border-radius: 18px; padding: 0; background: var(--surface-raised); color: var(--text); box-shadow: 0 28px 80px rgba(0,0,0,.65); }
 dialog::backdrop { background: rgba(0,0,0,.62); backdrop-filter: blur(5px); }
@@ -148,6 +155,7 @@ dialog form { padding: 22px; display: grid; gap: 10px; }
 dialog label { margin-top: 6px; font-size: .84rem; color: var(--muted); }
 dialog input { width: 100%; min-height: 48px; padding: 0 13px; color: var(--text); background: #0e0d0b; border: 1px solid rgba(255,255,255,.16); border-radius: var(--radius-sm); }
 dialog p { color: var(--muted); line-height: 1.55; }
+.form-helper { margin: -3px 0 2px; font-size: .78rem; }
 .form-error { min-height: 20px; margin: 0; color: var(--danger); font-size: .82rem; }
 .primary-button { min-height: 50px; margin-top: 4px; border: 0; border-radius: var(--radius-sm); color: var(--bg); background: var(--copper); font-weight: 700; cursor: pointer; }
 .toast { position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translate(-50%, 20px); max-width: min(88vw, 460px); padding: 11px 16px; border-radius: 999px; background: var(--text); color: #15110e; font-size: .84rem; opacity: 0; pointer-events: none; transition: opacity .2s, transform .3s cubic-bezier(.22,1,.36,1); }

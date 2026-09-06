@@ -9,7 +9,8 @@ const els = Object.fromEntries([
   "connection-status", "player-status", "video-frame", "track-title", "track-artist", "queue-position",
   "record", "artwork", "tonearm", "progress", "elapsed", "duration", "play-button",
   "previous-button", "next-button", "queue-list", "queue-count", "add-button", "add-dialog",
-  "add-form", "video-url", "video-title", "form-error", "install-button", "install-dialog", "toast"
+  "add-form", "video-url", "video-title", "form-error", "install-button", "install-dialog", "toast",
+  "keep-awake", "keep-awake-note"
 ].map(id => [id, document.getElementById(id)]));
 
 let player;
@@ -18,6 +19,10 @@ let currentIndex = 0;
 let playerState = -1;
 let playerMostlyVisible = false;
 let pendingPlay = false;
+let activePlaylistId = null;
+let playlistVideoIds = [];
+let playlistTitles = new Map();
+let pendingPlaylistIndex = 0;
 let isSeeking = false;
 let needleProgress = 0;
 let draggingNeedle = false;
@@ -27,6 +32,7 @@ let recordAngle = 0;
 let rotationFrame = 0;
 let lastRotationTime = 0;
 let deferredInstallPrompt;
+let wakeLock = null;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 window.onYouTubeIframeAPIReady = () => {
@@ -45,6 +51,12 @@ function onReady() {
   setStatus("已就緒", "點播放或移動唱針");
   renderQueue();
   updateProgress();
+  if (activePlaylistId) {
+    const method = pendingPlay && playerMostlyVisible ? "loadPlaylist" : "cuePlaylist";
+    player[method]({ listType: "playlist", list: activePlaylistId, index: pendingPlaylistIndex, startSeconds: 0 });
+    if (method === "loadPlaylist") pendingPlay = false;
+    return;
+  }
   const track = tracks[currentIndex];
   if (pendingPlay && playerMostlyVisible) {
     pendingPlay = false;
@@ -56,24 +68,27 @@ function onReady() {
 
 function onStateChange(event) {
   playerState = event.data;
+  if (activePlaylistId) syncPlaylistState();
   if (event.data === YT_STATE.PLAYING) {
     setStatus("播放中", "YouTube 播放中");
     els["play-button"].classList.add("is-playing");
     els["play-button"].setAttribute("aria-label", "暫停");
     if (!draggingNeedle) setNeedle(1, true);
     startRotation();
+    requestScreenWakeLock();
   } else if (event.data === YT_STATE.BUFFERING) {
     setStatus("緩衝中", "正在載入影片");
     stopRotation();
   } else if (event.data === YT_STATE.ENDED) {
     stopRotation();
     if (!draggingNeedle) setNeedle(0, true);
-    nextTrack(true);
+    if (!activePlaylistId) nextTrack(true);
   } else if (event.data === YT_STATE.PAUSED || event.data === YT_STATE.CUED) {
     setStatus("已暫停", "YouTube 已暫停");
     els["play-button"].classList.remove("is-playing");
     els["play-button"].setAttribute("aria-label", "播放");
     stopRotation();
+    releaseScreenWakeLock();
     if (!draggingNeedle) setNeedle(0, true);
   }
 }
@@ -100,6 +115,7 @@ function requestPlay() {
     return;
   }
   pendingPlay = false;
+  requestScreenWakeLock();
   player.playVideo();
 }
 
@@ -107,6 +123,7 @@ function requestPause() {
   pendingPlay = false;
   if (ready) player.pauseVideo();
   stopRotation();
+  releaseScreenWakeLock();
 }
 
 function togglePlayback() {
@@ -114,6 +131,9 @@ function togglePlayback() {
 }
 
 function loadTrack(index, autoplay = false) {
+  activePlaylistId = null;
+  playlistVideoIds = [];
+  playlistTitles.clear();
   currentIndex = (index + tracks.length) % tracks.length;
   const track = tracks[currentIndex];
   els["track-title"].textContent = track.title;
@@ -121,7 +141,7 @@ function loadTrack(index, autoplay = false) {
   els["queue-position"].textContent = `${currentIndex + 1} / ${tracks.length}`;
   els.artwork.src = `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
   els.artwork.alt = `${track.title} 封面`;
-  document.title = `${track.title} — Vinyl Music Player`;
+  document.title = `${track.title} - Vinyl Music Player`;
   setNeedle(0, true);
   stopRotation();
   renderQueue();
@@ -134,8 +154,75 @@ function loadTrack(index, autoplay = false) {
   }
 }
 
-function nextTrack(autoplay = playerState === YT_STATE.PLAYING) { loadTrack(currentIndex + 1, autoplay); }
-function previousTrack() { loadTrack(currentIndex - 1, playerState === YT_STATE.PLAYING); }
+function nextTrack(autoplay = playerState === YT_STATE.PLAYING) {
+  if (activePlaylistId && ready) { player.nextVideo(); return; }
+  loadTrack(currentIndex + 1, autoplay);
+}
+
+function previousTrack() {
+  if (activePlaylistId && ready) { player.previousVideo(); return; }
+  loadTrack(currentIndex - 1, playerState === YT_STATE.PLAYING);
+}
+
+function loadYouTubePlaylist(playlistId, autoplay = true) {
+  activePlaylistId = playlistId;
+  playlistVideoIds = [];
+  playlistTitles.clear();
+  currentIndex = 0;
+  pendingPlaylistIndex = 0;
+  pendingPlay = autoplay;
+  els["track-title"].textContent = "正在載入播放清單";
+  els["track-artist"].textContent = "YouTube";
+  els["queue-position"].textContent = "PLAYLIST";
+  els.artwork.src = "./icons/icon-512.png";
+  els.artwork.alt = "Vinyl Music Player 圖標";
+  renderQueue();
+  if (!ready) return;
+  const method = autoplay && playerMostlyVisible ? "loadPlaylist" : "cuePlaylist";
+  player[method]({ listType: "playlist", list: playlistId, index: 0, startSeconds: 0 });
+  if (method === "loadPlaylist") pendingPlay = false;
+  else if (autoplay) showToast("播放器回到畫面後會開始播放清單");
+}
+
+function playPlaylistAt(index) {
+  pendingPlaylistIndex = index;
+  currentIndex = index;
+  renderQueue();
+  if (!ready) { pendingPlay = true; return; }
+  if (!playerMostlyVisible) {
+    pendingPlay = true;
+    player.cuePlaylist({ listType: "playlist", list: activePlaylistId, index, startSeconds: 0 });
+    els["video-frame"].scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "center" });
+    showToast("播放器出現在畫面後會播放這首歌");
+    return;
+  }
+  pendingPlay = false;
+  requestScreenWakeLock();
+  player.playVideoAt(index);
+}
+
+function syncPlaylistState() {
+  if (!ready || !activePlaylistId || !player.getPlaylist) return;
+  const ids = player.getPlaylist() || [];
+  if (!ids.length) return;
+  playlistVideoIds = [...ids];
+  const reportedIndex = player.getPlaylistIndex?.();
+  currentIndex = Number.isInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : currentIndex;
+  pendingPlaylistIndex = currentIndex;
+  const videoId = playlistVideoIds[currentIndex];
+  const data = player.getVideoData?.() || {};
+  if (videoId && data.title) playlistTitles.set(videoId, { title: data.title, artist: data.author || "YouTube" });
+  const metadata = playlistTitles.get(videoId) || { title: `播放清單曲目 ${currentIndex + 1}`, artist: "YouTube 播放清單" };
+  els["track-title"].textContent = metadata.title;
+  els["track-artist"].textContent = metadata.artist;
+  els["queue-position"].textContent = `${currentIndex + 1} / ${playlistVideoIds.length}`;
+  if (videoId) {
+    els.artwork.src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    els.artwork.alt = `${metadata.title} 封面`;
+  }
+  document.title = `${metadata.title} - Vinyl Music Player`;
+  renderQueue();
+}
 
 function setNeedle(value, animate = false) {
   needleProgress = Math.max(0, Math.min(1, value));
@@ -192,8 +279,18 @@ function formatTime(seconds) {
 }
 
 function renderQueue() {
-  els["queue-count"].textContent = `${tracks.length} 首`;
-  els["queue-list"].replaceChildren(...tracks.map((track, index) => {
+  const queueTracks = activePlaylistId
+    ? playlistVideoIds.map((videoId, index) => ({ videoId, ...(playlistTitles.get(videoId) || { title: `播放清單曲目 ${index + 1}`, artist: "YouTube 播放清單" }) }))
+    : tracks;
+  els["queue-count"].textContent = activePlaylistId && !queueTracks.length ? "載入中" : `${queueTracks.length} 首`;
+  if (!queueTracks.length) {
+    const loading = document.createElement("li");
+    loading.className = "queue-empty";
+    loading.textContent = "正在讀取播放清單內容";
+    els["queue-list"].replaceChildren(loading);
+    return;
+  }
+  els["queue-list"].replaceChildren(...queueTracks.map((track, index) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -201,7 +298,7 @@ function renderQueue() {
     button.innerHTML = `<span class="queue-index">${String(index + 1).padStart(2, "0")}</span><span class="queue-title"><strong></strong><span></span></span>${index === currentIndex ? '<span class="queue-now" aria-label="目前歌曲"></span>' : '<span></span>'}`;
     button.querySelector("strong").textContent = track.title;
     button.querySelector(".queue-title span").textContent = track.artist;
-    button.addEventListener("click", () => loadTrack(index, true));
+    button.addEventListener("click", () => activePlaylistId ? playPlaylistAt(index) : loadTrack(index, true));
     item.append(button);
     return item;
   }));
@@ -216,6 +313,35 @@ function parseVideoId(input) {
       : url.searchParams.get("v") || url.pathname.match(/\/(?:shorts|embed)\/([\w-]{11})/)?.[1];
     return /^[\w-]{11}$/.test(candidate || "") ? candidate : null;
   } catch { return null; }
+}
+
+function parsePlaylistId(input) {
+  const value = input.trim();
+  if (/^(?:PL|OLAK5uy_|RD|UU|LL|FL)[\w-]{8,}$/.test(value)) return value;
+  try {
+    const url = new URL(value);
+    const candidate = url.searchParams.get("list");
+    return /^[\w-]{10,}$/.test(candidate || "") ? candidate : null;
+  } catch { return null; }
+}
+
+async function requestScreenWakeLock() {
+  if (!els["keep-awake"].checked || wakeLock || !("wakeLock" in navigator) || document.hidden) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; }, { once: true });
+    els["keep-awake-note"].textContent = "播放期間會避免 iPhone 自動鎖定。";
+  } catch {
+    els["keep-awake-note"].textContent = "瀏覽器未允許保持亮屏，請確認頁面位於前景。";
+  }
+}
+
+async function releaseScreenWakeLock() {
+  if (!wakeLock) return;
+  const lock = wakeLock;
+  wakeLock = null;
+  try { await lock.release(); } catch { /* already released by the browser */ }
+  els["keep-awake-note"].textContent = "避免 iPhone 自動鎖定，手動鎖屏仍會暫停。";
 }
 
 function showToast(message) {
@@ -236,8 +362,15 @@ els["add-button"].addEventListener("click", () => {
 els["add-form"].addEventListener("submit", event => {
   if (event.submitter?.value !== "default") return;
   event.preventDefault();
+  const playlistId = parsePlaylistId(els["video-url"].value);
+  if (playlistId) {
+    els["add-dialog"].close();
+    els["add-form"].reset();
+    loadYouTubePlaylist(playlistId, true);
+    return;
+  }
   const videoId = parseVideoId(els["video-url"].value);
-  if (!videoId) { els["form-error"].textContent = "請輸入有效的 YouTube 網址或 11 碼 Video ID。"; return; }
+  if (!videoId) { els["form-error"].textContent = "請輸入有效的 YouTube 單曲或播放清單網址。"; return; }
   tracks.push({ videoId, title: els["video-title"].value.trim() || "YouTube 影片", artist: "YouTube" });
   els["add-dialog"].close();
   els["add-form"].reset();
@@ -282,6 +415,10 @@ new IntersectionObserver(entries => {
 }, { threshold: [.5] }).observe(els["video-frame"]);
 
 document.addEventListener("visibilitychange", () => { if (document.hidden) requestPause(); });
+els["keep-awake"].addEventListener("change", () => {
+  if (els["keep-awake"].checked && playerState === YT_STATE.PLAYING) requestScreenWakeLock();
+  else releaseScreenWakeLock();
+});
 reduceMotion.addEventListener("change", () => { if (reduceMotion.matches) stopRotation(); else if (playerState === YT_STATE.PLAYING) startRotation(); });
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); deferredInstallPrompt = event; });
 els["install-button"].addEventListener("click", async () => {
@@ -293,6 +430,12 @@ els["install-button"].addEventListener("click", async () => {
 });
 
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+if (!("wakeLock" in navigator)) {
+  els["keep-awake"].disabled = true;
+  els["keep-awake"].checked = false;
+  els["keep-awake"].closest("label").classList.add("is-unsupported");
+  els["keep-awake-note"].textContent = "此版本的瀏覽器不支援保持亮屏。";
+}
 renderQueue();
 setInterval(updateProgress, 500);
 

@@ -40,3 +40,19 @@ test("offline shell and accessibility hooks are present", () => {
   assert.match(app, /install-button"\][\s\S]*?requestPause\(\);[\s\S]*?install-dialog"\]\.showModal/);
   assert.doesNotMatch(app, /requestAnimationFrame\(updateProgress\)/);
 });
+
+test("playlist URLs load through the official YouTube player queue", () => {
+  assert.match(html, /YouTube 單曲或播放清單網址/);
+  assert.match(app, /function parsePlaylistId/);
+  assert.match(app, /player\[method\]\(\{ listType: "playlist", list: playlistId/);
+  assert.match(app, /player\.nextVideo\(\)/);
+  assert.match(app, /player\.previousVideo\(\)/);
+  assert.match(app, /player\.playVideoAt\(index\)/);
+});
+
+test("screen wake lock is opt-in and releases when playback pauses", () => {
+  assert.match(html, /id="keep-awake"[^>]*checked/);
+  assert.match(app, /navigator\.wakeLock\.request\("screen"\)/);
+  assert.match(app, /releaseScreenWakeLock\(\)/);
+  assert.match(html, /手動鎖屏仍會暫停/);
+});
