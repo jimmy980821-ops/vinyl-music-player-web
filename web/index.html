@@ -101,11 +101,14 @@
       </div>
 
       <section class="lower-panel" id="lyrics-panel" role="tabpanel" aria-labelledby="lyrics-tab">
-        <div class="empty-state">
+        <div class="lyrics-state" id="lyrics-state" role="status" aria-live="polite">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10M7 12h7M7 16h5"/><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/></svg>
-          <strong>目前沒有歌詞</strong>
-          <span>未來可串接具有授權的歌詞服務。</span>
+          <strong id="lyrics-state-title">正在準備歌詞</strong>
+          <span id="lyrics-state-note">換歌後會自動搜尋。</span>
+          <button class="text-button" id="lyrics-retry" type="button" hidden>再試一次</button>
         </div>
+        <div class="lyrics-content" id="lyrics-content" aria-label="歌詞" hidden></div>
+        <p class="lyrics-credit" id="lyrics-credit" hidden>歌詞由 <a href="https://lrclib.net" target="_blank" rel="noopener noreferrer">LRCLIB</a> 提供</p>
       </section>
 
       <section class="lower-panel queue" id="queue-panel" role="tabpanel" aria-labelledby="queue-tab" hidden>

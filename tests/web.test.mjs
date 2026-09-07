@@ -68,7 +68,18 @@ test("app-like queue, shuffle, lyrics and vinyl customization are wired", () => 
   assert.match(app, /remainingTrackIds/);
   assert.match(app, /localStorage\.setItem\(STORAGE_KEY/);
   assert.match(app, /VINYL_STYLES/);
-  assert.match(html, /目前沒有歌詞/);
+  assert.match(html, /id="lyrics-content"/);
+});
+
+test("lyrics search uses LRCLIB responsibly and supports synchronized lines", () => {
+  assert.match(app, /https:\/\/lrclib\.net\/api\/search/);
+  assert.match(app, /"Lrclib-Client"/);
+  assert.match(app, /lastLyricsRequestAt/);
+  assert.match(app, /function parseSyncedLyrics/);
+  assert.match(app, /function updateLyricsPlayback/);
+  assert.match(app, /LYRICS_CACHE_KEY/);
+  assert.match(html, /href="https:\/\/lrclib\.net"/);
+  assert.doesNotMatch(app, /(?:api[_-]?key|authorization)\s*[:=]\s*["'][^"']+/i);
 });
 
 test("tonearm requires an intentional horizontal drag", () => {

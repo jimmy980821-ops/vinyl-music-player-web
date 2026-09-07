@@ -9,11 +9,14 @@ const VINYL_STYLES = [
 ].map(([id, name]) => ({ id, name }));
 const YT_STATE = { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
 const STORAGE_KEY = "vinyl-music-player-state-v2";
+const LYRICS_CACHE_KEY = "vinyl-music-player-lyrics-v1";
+const LYRICS_API = "https://lrclib.net/api/search";
 const els = Object.fromEntries([
   "connection-status", "player-status", "video-frame", "track-title", "track-artist", "queue-position",
   "record", "artwork", "tonearm", "progress", "elapsed", "duration", "play-button",
   "previous-button", "next-button", "shuffle-button", "queue-button", "queue-list", "queue-count",
   "edit-queue-button", "clear-queue-button", "lyrics-tab", "queue-tab", "lyrics-panel", "queue-panel",
+  "lyrics-state", "lyrics-state-title", "lyrics-state-note", "lyrics-retry", "lyrics-content", "lyrics-credit",
   "add-button", "add-dialog", "add-form", "video-url", "video-title", "form-error",
   "install-button", "install-dialog", "style-button", "style-dialog", "style-grid", "toast",
   "keep-awake", "keep-awake-note"
@@ -32,6 +35,8 @@ let ready = false, playerMostlyVisible = false, pendingPlay = false, isSeeking =
 let playerState = -1, needleProgress = 0, recordAngle = 0, rotationFrame = 0, lastRotationTime = 0;
 let needleCandidate = false, draggingNeedle = false, dragStartProgress = 0, dragStartX = 0, dragStartY = 0;
 let queueEditing = false, pendingPlaylistId = null, pendingPlaylistIndex = 0;
+let lyricsRequest, lyricsLookupTimer, lyricsSignature = "", activeLyricIndex = -1, lyricLineButtons = [], lastLyricsRequestAt = 0;
+let lyricsCache = loadLyricsCache();
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 function loadSavedState() {
@@ -53,6 +58,17 @@ function loadSavedState() {
 
 function persistState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ tracks, currentTrackId: tracks[currentIndex]?.id || null, shuffleEnabled, vinylStyle: selectedStyle }));
+}
+
+function loadLyricsCache() {
+  try { return JSON.parse(localStorage.getItem(LYRICS_CACHE_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function persistLyricsCache() {
+  const recent = Object.entries(lyricsCache).sort((a, b) => b[1].savedAt - a[1].savedAt).slice(0, 40);
+  lyricsCache = Object.fromEntries(recent);
+  try { localStorage.setItem(LYRICS_CACHE_KEY, JSON.stringify(lyricsCache)); } catch { /* Cache is optional. */ }
 }
 
 window.onYouTubeIframeAPIReady = () => {
@@ -208,18 +224,170 @@ function syncCurrentMetadata() {
   updateTrackDisplay(); persistState(); renderQueue();
 }
 
+function cleanMediaText(value) {
+  return String(value || "")
+    .replace(/\s*[\[(](?:(?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?|visuali[sz]er|mv|hd|4k|live)|官方(?:MV|影片|版本)|完整版)[^)\]]*[)\]]/gi, "")
+    .replace(/\s+(?:official\s+)?(?:music\s+)?(?:video|audio|lyrics?|mv)\s*$/i, "")
+    .replace(/\s+/g, " ").trim();
+}
+
+function lyricsMetadata(track) {
+  let title = cleanMediaText(track.title);
+  let artist = cleanMediaText(track.artist)
+    .replace(/\s*-\s*Topic$/i, "").replace(/VEVO$/i, "").replace(/\s*Official$/i, "").trim();
+  const parts = title.split(/\s+[-–—|]\s+/);
+  if (parts.length > 1) {
+    const titleArtist = cleanMediaText(parts.shift());
+    title = cleanMediaText(parts.join(" - "));
+    if (titleArtist) artist = titleArtist;
+  }
+  if (/^(?:YouTube|YouTube 播放清單)$/i.test(artist)) artist = "";
+  return { title, artist };
+}
+
+function normalizeMatch(value) {
+  return String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function lyricsMatchScore(result, metadata, duration) {
+  const wantedTitle = normalizeMatch(metadata.title), foundTitle = normalizeMatch(result.trackName);
+  const wantedArtist = normalizeMatch(metadata.artist), foundArtist = normalizeMatch(result.artistName);
+  let score = result.syncedLyrics ? 8 : result.plainLyrics ? 3 : 0;
+  if (wantedTitle && foundTitle === wantedTitle) score += 100;
+  else if (wantedTitle && (foundTitle.includes(wantedTitle) || wantedTitle.includes(foundTitle))) score += 45;
+  if (wantedArtist && foundArtist === wantedArtist) score += 55;
+  else if (wantedArtist && (foundArtist.includes(wantedArtist) || wantedArtist.includes(foundArtist))) score += 25;
+  const difference = Math.abs(Number(result.duration) - duration);
+  if (duration > 0 && difference <= 2) score += 35;
+  else if (duration > 0 && difference <= 12) score += 16;
+  return score;
+}
+
+function setLyricsState(title, note, retry = false) {
+  els["lyrics-state"].hidden = false; els["lyrics-content"].hidden = true; els["lyrics-credit"].hidden = true;
+  els["lyrics-state-title"].textContent = title; els["lyrics-state-note"].textContent = note;
+  els["lyrics-retry"].hidden = !retry; lyricLineButtons = []; activeLyricIndex = -1;
+}
+
+function parseSyncedLyrics(value) {
+  return String(value || "").split(/\r?\n/).flatMap(line => {
+    const matches = [...line.matchAll(/\[(\d{1,3}):(\d{2}(?:\.\d{1,3})?)\]/g)];
+    const text = line.replace(/\[[^\]]+]/g, "").trim();
+    return text ? matches.map(match => ({ time: Number(match[1]) * 60 + Number(match[2]), text })) : [];
+  }).sort((a, b) => a.time - b.time);
+}
+
+function renderLyricsResult(result) {
+  els["lyrics-credit"].hidden = false;
+  if (result.instrumental && !result.plainLyrics && !result.syncedLyrics) {
+    setLyricsState("這首是純音樂", "LRCLIB 沒有歌詞內容。");
+    els["lyrics-credit"].hidden = false; return;
+  }
+  const synced = parseSyncedLyrics(result.syncedLyrics);
+  const plain = String(result.plainLyrics || "").trim();
+  if (!synced.length && !plain) { setLyricsState("找不到歌詞", "這首歌目前還沒有可用歌詞。", true); return; }
+  els["lyrics-state"].hidden = true; els["lyrics-content"].hidden = false; els["lyrics-content"].replaceChildren();
+  if (synced.length) {
+    const list = document.createElement("ol"); list.className = "synced-lyrics";
+    lyricLineButtons = synced.map((line, index) => {
+      const item = document.createElement("li"), button = document.createElement("button");
+      button.type = "button"; button.textContent = line.text; button.dataset.time = String(line.time);
+      button.setAttribute("aria-label", `${formatTime(line.time)} ${line.text}`);
+      button.addEventListener("click", () => { if (ready) { player.seekTo(line.time, true); updateLyricsPlayback(line.time); } });
+      item.append(button); list.append(item); return { button, time: line.time, index };
+    });
+    els["lyrics-content"].append(list);
+    updateLyricsPlayback(ready ? player.getCurrentTime?.() || 0 : 0);
+  } else {
+    const paragraph = document.createElement("p"); paragraph.className = "plain-lyrics"; paragraph.textContent = plain;
+    els["lyrics-content"].append(paragraph);
+  }
+}
+
+async function throttledLyricsSearch(metadata, signal) {
+  const wait = Math.max(0, 350 - (Date.now() - lastLyricsRequestAt));
+  if (wait) await new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, wait);
+    signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+  });
+  const params = new URLSearchParams({ track_name: metadata.title });
+  if (metadata.artist) params.set("artist_name", metadata.artist);
+  lastLyricsRequestAt = Date.now();
+  const response = await fetch(`${LYRICS_API}?${params}`, {
+    signal, headers: { "Lrclib-Client": "VinylMusicPlayerWeb/1.0 (https://jimmy980821-ops.github.io/vinyl-music-player-web/)" }
+  });
+  if (response.status === 429) throw new Error("歌詞服務忙碌中，請稍後再試。");
+  if (!response.ok) throw new Error("無法連線到歌詞服務。");
+  return response.json();
+}
+
+async function loadLyricsForCurrentTrack(force = false) {
+  const track = tracks[currentIndex]; if (!track) { setLyricsState("目前沒有歌曲", "加入音樂後會自動搜尋歌詞。"); return; }
+  const metadata = lyricsMetadata(track), signature = `${normalizeMatch(metadata.title)}|${normalizeMatch(metadata.artist)}`;
+  if (!metadata.title || (!force && signature === lyricsSignature)) return;
+  lyricsSignature = signature; lyricsRequest?.abort(); lyricsRequest = new AbortController();
+  const cached = lyricsCache[signature], cacheAge = cached ? Date.now() - cached.savedAt : Infinity;
+  if (!force && cached && cacheAge < (cached.result ? 30 : 1) * 86400000) {
+    cached.result ? renderLyricsResult(cached.result) : setLyricsState("找不到歌詞", "這首歌目前還沒有可用歌詞。", true); return;
+  }
+  setLyricsState("正在搜尋歌詞", metadata.artist ? `${metadata.artist} · ${metadata.title}` : metadata.title);
+  try {
+    let results = await throttledLyricsSearch(metadata, lyricsRequest.signal);
+    if (!results.length && metadata.artist) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 350);
+        lyricsRequest.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+      });
+      results = await throttledLyricsSearch({ title: metadata.title, artist: "" }, lyricsRequest.signal);
+    }
+    if (signature !== lyricsSignature) return;
+    const duration = ready ? Number(player.getDuration?.()) || 0 : 0;
+    const result = results.filter(item => item && (item.syncedLyrics || item.plainLyrics || item.instrumental))
+      .sort((a, b) => lyricsMatchScore(b, metadata, duration) - lyricsMatchScore(a, metadata, duration))[0] || null;
+    lyricsCache[signature] = { savedAt: Date.now(), result }; persistLyricsCache();
+    result ? renderLyricsResult(result) : setLyricsState("找不到歌詞", "可能是影片標題與正式歌名不同。", true);
+  } catch (error) {
+    if (error.name !== "AbortError" && signature === lyricsSignature) setLyricsState("歌詞載入失敗", error.message || "請稍後再試。", true);
+  }
+}
+
+function scheduleLyricsLookup(track) {
+  const metadata = lyricsMetadata(track), signature = `${normalizeMatch(metadata.title)}|${normalizeMatch(metadata.artist)}`;
+  if (!metadata.title || signature === lyricsSignature) return;
+  clearTimeout(lyricsLookupTimer); lyricsLookupTimer = setTimeout(() => loadLyricsForCurrentTrack(), 180);
+}
+
+function updateLyricsPlayback(currentTime) {
+  if (!lyricLineButtons.length) return;
+  let nextIndex = -1;
+  for (let index = 0; index < lyricLineButtons.length; index += 1) {
+    if (lyricLineButtons[index].time <= currentTime + .08) nextIndex = index; else break;
+  }
+  if (nextIndex === activeLyricIndex) return;
+  lyricLineButtons[activeLyricIndex]?.button.classList.remove("is-active"); activeLyricIndex = nextIndex;
+  const active = lyricLineButtons[activeLyricIndex]?.button; if (!active) return;
+  active.classList.add("is-active"); active.setAttribute("aria-current", "true");
+  lyricLineButtons.forEach((line, index) => { if (index !== activeLyricIndex) line.button.removeAttribute("aria-current"); });
+  if (!els["lyrics-panel"].hidden) {
+    els["lyrics-content"].scrollTo({ top: Math.max(0, active.offsetTop - els["lyrics-content"].clientHeight / 2), behavior: reduceMotion.matches ? "auto" : "smooth" });
+  }
+}
+
 function updateTrackDisplay() {
   const track = tracks[currentIndex];
   if (!track) {
     els["track-title"].textContent = "播放清單是空的";
     els["track-artist"].textContent = "從右上角加入 YouTube 音樂即可開始";
     els["queue-position"].textContent = "EMPTY"; els.artwork.src = "./icons/icon-512.png";
-    els.artwork.alt = "Vinyl Music Player 圖標"; document.title = "Vinyl Music Player"; return;
+    els.artwork.alt = "Vinyl Music Player 圖標"; document.title = "Vinyl Music Player";
+    lyricsSignature = ""; lyricsRequest?.abort(); setLyricsState("目前沒有歌曲", "加入音樂後會自動搜尋歌詞。"); return;
   }
   els["track-title"].textContent = track.title; els["track-artist"].textContent = track.artist;
   els["queue-position"].textContent = `${currentIndex + 1} / ${tracks.length}`;
   els.artwork.src = `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`; els.artwork.alt = `${track.title} 封面`;
   document.title = `${track.title} - Vinyl Music Player`;
+  scheduleLyricsLookup(track);
 }
 
 function setNeedle(value, animate = false) {
@@ -249,7 +417,7 @@ function updateProgress() {
   if (!document.hidden && ready && player.getDuration && !isSeeking) {
     const total = player.getDuration() || 0, current = player.getCurrentTime() || 0;
     els.progress.max = Math.max(total, 1); els.progress.value = current; els.progress.disabled = total <= 0;
-    els.elapsed.textContent = formatTime(current); els.duration.textContent = formatTime(total);
+    els.elapsed.textContent = formatTime(current); els.duration.textContent = formatTime(total); updateLyricsPlayback(current);
     els.progress.setAttribute("aria-valuetext", `${formatTime(current)} / ${formatTime(total)}`);
   }
 }
@@ -343,6 +511,7 @@ function updateTransportState() {
 function showPanel(panel) {
   const queue = panel === "queue"; els["lyrics-panel"].hidden = queue; els["queue-panel"].hidden = !queue;
   els["lyrics-tab"].setAttribute("aria-selected", String(!queue)); els["queue-tab"].setAttribute("aria-selected", String(queue));
+  if (!queue) { loadLyricsForCurrentTrack(); updateLyricsPlayback(ready ? player.getCurrentTime?.() || 0 : 0); }
   if (queue) els["queue-panel"].scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "nearest" });
 }
 
@@ -402,6 +571,7 @@ els["next-button"].addEventListener("click", () => nextTrack());
 els["shuffle-button"].addEventListener("click", toggleShuffle);
 els["queue-button"].addEventListener("click", () => showPanel("queue"));
 els["lyrics-tab"].addEventListener("click", () => showPanel("lyrics"));
+els["lyrics-retry"].addEventListener("click", () => { lyricsSignature = ""; loadLyricsForCurrentTrack(true); });
 els["queue-tab"].addEventListener("click", () => showPanel("queue"));
 els["edit-queue-button"].addEventListener("click", toggleQueueEditing);
 els["clear-queue-button"].addEventListener("click", clearQueue);
