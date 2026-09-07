@@ -45,9 +45,9 @@ test("playlist URLs load through the official YouTube player queue", () => {
   assert.match(html, /YouTube 單曲或播放清單網址/);
   assert.match(app, /function parsePlaylistId/);
   assert.match(app, /player\[method\]\(\{ listType: "playlist", list: playlistId/);
-  assert.match(app, /player\.nextVideo\(\)/);
-  assert.match(app, /player\.previousVideo\(\)/);
-  assert.match(app, /player\.playVideoAt\(index\)/);
+  assert.match(app, /function hydratePlaylistQueue/);
+  assert.match(app, /player\.getPlaylist\(\)/);
+  assert.match(app, /tracks = ids\.map/);
 });
 
 test("screen wake lock is opt-in and releases when playback pauses", () => {
@@ -55,4 +55,29 @@ test("screen wake lock is opt-in and releases when playback pauses", () => {
   assert.match(app, /navigator\.wakeLock\.request\("screen"\)/);
   assert.match(app, /releaseScreenWakeLock\(\)/);
   assert.match(html, /手動鎖屏仍會暫停/);
+});
+
+test("app-like queue, shuffle, lyrics and vinyl customization are wired", () => {
+  for (const id of ["shuffle-button", "queue-panel", "lyrics-panel", "edit-queue-button", "clear-queue-button", "style-dialog"]) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(app, /function moveTrack/);
+  assert.match(app, /function removeTrack/);
+  assert.match(app, /function clearQueue/);
+  assert.match(app, /playHistory/);
+  assert.match(app, /remainingTrackIds/);
+  assert.match(app, /localStorage\.setItem\(STORAGE_KEY/);
+  assert.match(app, /VINYL_STYLES/);
+  assert.match(html, /目前沒有歌詞/);
+});
+
+test("tonearm requires an intentional horizontal drag", () => {
+  assert.match(app, /Math\.hypot\(dx, dy\) < 12/);
+  assert.match(app, /Math\.abs\(dx\) <= Math\.abs\(dy\) \* \.8/);
+  assert.match(css, /\.tonearm[^}]*touch-action:\s*pan-y/s);
+});
+
+test("mobile player stays visible while controls scroll", () => {
+  assert.match(css, /\.broadcast-panel\s*\{[^}]*position:\s*sticky/s);
+  assert.match(css, /\.broadcast-panel\s*\{[^}]*z-index:\s*5/s);
 });

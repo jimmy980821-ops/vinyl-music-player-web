@@ -22,6 +22,9 @@
       <p id="connection-status" role="status" aria-live="polite" aria-atomic="true">準備播放器</p>
     </div>
     <div class="header-actions">
+      <button class="icon-button" id="style-button" type="button" aria-label="選擇黑膠樣式" title="選擇黑膠樣式">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 4a8 8 0 0 1 8 8"/></svg>
+      </button>
       <button class="icon-button" id="install-button" type="button" aria-label="安裝到主畫面" title="安裝到主畫面">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 15v4h14v-4"/></svg>
       </button>
@@ -74,6 +77,9 @@
       </div>
 
       <div class="transport" aria-label="播放控制">
+        <button class="transport-button" id="shuffle-button" type="button" aria-label="隨機播放，已關閉" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3c4.5 0 5.5 10 10 10h3M17 4l3 3-3 3M4 17h3c1.6 0 2.8-1.3 3.9-3M17 14l3 3-3 3"/></svg>
+        </button>
         <button class="transport-button" id="previous-button" type="button" aria-label="上一首">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M19 6 9 12l10 6Z"/></svg>
         </button>
@@ -84,12 +90,34 @@
         <button class="transport-button" id="next-button" type="button" aria-label="下一首">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M5 6l10 6-10 6Z"/></svg>
         </button>
+        <button class="transport-button" id="queue-button" type="button" aria-label="顯示播放佇列">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8M19 15v6M16 18h6"/></svg>
+        </button>
       </div>
 
-      <div class="queue" aria-labelledby="queue-title">
-        <div class="queue-header"><h3 id="queue-title">播放佇列</h3><span id="queue-count">3 首</span></div>
-        <ol id="queue-list"></ol>
+      <div class="panel-switcher" role="tablist" aria-label="播放器內容">
+        <button id="lyrics-tab" role="tab" aria-selected="true" aria-controls="lyrics-panel" type="button">歌詞</button>
+        <button id="queue-tab" role="tab" aria-selected="false" aria-controls="queue-panel" type="button">接下來</button>
       </div>
+
+      <section class="lower-panel" id="lyrics-panel" role="tabpanel" aria-labelledby="lyrics-tab">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10M7 12h7M7 16h5"/><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/></svg>
+          <strong>目前沒有歌詞</strong>
+          <span>未來可串接具有授權的歌詞服務。</span>
+        </div>
+      </section>
+
+      <section class="lower-panel queue" id="queue-panel" role="tabpanel" aria-labelledby="queue-tab" hidden>
+        <div class="queue-header">
+          <div><h3 id="queue-title">接下來播放</h3><span id="queue-count">3 首</span></div>
+          <div class="queue-actions">
+            <button id="edit-queue-button" class="text-button" type="button" aria-pressed="false">編輯</button>
+            <button id="clear-queue-button" class="text-button danger-button" type="button">清空</button>
+          </div>
+        </div>
+        <ol id="queue-list" aria-labelledby="queue-title"></ol>
+      </section>
     </section>
   </main>
 
@@ -122,6 +150,18 @@
       <p>iPhone／iPad：點 Safari 的分享按鈕，再選「加入主畫面」。</p>
       <p>桌面 Chrome／Edge：從網址列或瀏覽器選單選擇「安裝應用程式」。</p>
       <button class="primary-button" value="close" type="submit">知道了</button>
+    </form>
+  </dialog>
+
+  <dialog id="style-dialog" class="style-sheet" aria-labelledby="style-dialog-title">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <h2 id="style-dialog-title">選擇黑膠樣式</h2>
+        <button class="icon-button" value="close" aria-label="關閉" type="submit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="style-grid" id="style-grid"></div>
     </form>
   </dialog>
 
