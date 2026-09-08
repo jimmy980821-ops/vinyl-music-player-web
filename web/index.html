@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#14110e">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta name="description" content="可安裝到主畫面的復古黑膠 YouTube 播放器。">
+  <meta name="description" content="可安裝到主畫面的復古黑膠 YouTube 與 Spotify 播放器。">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Vinyl Music">
@@ -35,7 +35,7 @@
   </header>
 
   <main class="player-shell">
-    <section class="broadcast-panel" aria-labelledby="broadcast-title">
+    <section class="broadcast-panel" id="broadcast-panel" aria-labelledby="broadcast-title">
       <div class="section-heading">
         <h2 id="broadcast-title">YouTube 播放器</h2>
         <span class="status-badge" id="player-status" aria-hidden="true">載入中</span>
@@ -43,7 +43,10 @@
       <div class="video-frame" id="video-frame">
         <div id="youtube-player"></div>
       </div>
-      <p class="policy-note">影片保持可見並保留 YouTube 原生控制，不下載或分離音訊。</p>
+      <div class="spotify-frame" id="spotify-frame" hidden>
+        <div id="spotify-player"></div>
+      </div>
+      <p class="policy-note" id="provider-note">影片保持可見並保留 YouTube 原生控制，不下載或分離音訊。</p>
       <label class="keep-awake-control" for="keep-awake">
         <input id="keep-awake" type="checkbox" checked>
         <span><strong>播放時保持螢幕亮著</strong><small id="keep-awake-note">避免 iPhone 自動鎖定，手動鎖屏仍會暫停。</small></span>
@@ -132,11 +135,11 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
         </button>
       </div>
-      <label for="video-url">YouTube 單曲或播放清單網址</label>
-      <input id="video-url" name="video-url" type="text" inputmode="url" autocomplete="off" placeholder="https://music.youtube.com/playlist?list=…" required aria-describedby="url-helper">
-      <p class="form-helper" id="url-helper">播放清單只需貼一次，之後會自動接續播放。</p>
-      <label for="video-title">單曲名稱（選填）</label>
-      <input id="video-title" name="video-title" type="text" autocomplete="off" placeholder="YouTube 影片">
+      <label for="video-url">YouTube 或 Spotify 網址</label>
+      <input id="video-url" name="video-url" type="text" inputmode="url" autocomplete="off" placeholder="貼上單曲、專輯或播放清單網址" required aria-describedby="url-helper">
+      <p class="form-helper" id="url-helper">Spotify 會使用無影片的官方播放卡；YouTube 仍需顯示影片播放器。</p>
+      <label for="video-title">顯示名稱（選填）</label>
+      <input id="video-title" name="video-title" type="text" autocomplete="off" placeholder="會自動讀取歌曲名稱">
       <p class="form-error" id="form-error" role="alert"></p>
       <button class="primary-button" id="confirm-add" value="default" type="submit">加入並播放</button>
     </form>

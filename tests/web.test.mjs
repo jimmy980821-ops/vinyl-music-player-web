@@ -42,12 +42,24 @@ test("offline shell and accessibility hooks are present", () => {
 });
 
 test("playlist URLs load through the official YouTube player queue", () => {
-  assert.match(html, /YouTube 單曲或播放清單網址/);
+  assert.match(html, /YouTube 或 Spotify 網址/);
   assert.match(app, /function parsePlaylistId/);
   assert.match(app, /player\[method\]\(\{ listType: "playlist", list: playlistId/);
   assert.match(app, /function hydratePlaylistQueue/);
   assert.match(app, /player\.getPlaylist\(\)/);
   assert.match(app, /tracks = ids\.map/);
+});
+
+test("Spotify links use the official compact audio embed", () => {
+  assert.match(html, /id="spotify-frame"[^>]*hidden/);
+  assert.match(css, /\.spotify-frame\s*\{[^}]*min-height:\s*152px/s);
+  assert.match(app, /https:\/\/open\.spotify\.com\/embed\/iframe-api\/v1/);
+  assert.match(app, /function parseSpotifyEntity/);
+  assert.match(app, /spotify:\(\?:track\|album\|playlist\)/);
+  assert.match(app, /spotifyApi\.createController/);
+  assert.match(app, /controller\.addListener\("playback_update"/);
+  assert.match(app, /fetchSpotifyMetadata/);
+  assert.match(app, /currentProvider\(\) === "youtube"\) requestPause/);
 });
 
 test("screen wake lock is opt-in and releases when playback pauses", () => {

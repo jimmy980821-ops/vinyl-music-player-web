@@ -1,7 +1,7 @@
 const DEFAULT_TRACKS = [
-  { id: "demo-iframe", videoId: "M7lc1UVf-VE", title: "IFrame Player API Demo", artist: "Google for Developers" },
-  { id: "demo-bunny", videoId: "aqz-KE-bpKQ", title: "Big Buck Bunny", artist: "Blender Foundation" },
-  { id: "demo-zoo", videoId: "jNQXAC9IVRw", title: "Me at the zoo", artist: "jawed" }
+  { id: "demo-iframe", provider: "youtube", videoId: "M7lc1UVf-VE", title: "IFrame Player API Demo", artist: "Google for Developers" },
+  { id: "demo-bunny", provider: "youtube", videoId: "aqz-KE-bpKQ", title: "Big Buck Bunny", artist: "Blender Foundation" },
+  { id: "demo-zoo", provider: "youtube", videoId: "jNQXAC9IVRw", title: "Me at the zoo", artist: "jawed" }
 ];
 const VINYL_STYLES = [
   ["classic", "經典黑膠"], ["transparent", "透明煙燻"], ["ivory", "象牙白"],
@@ -12,12 +12,12 @@ const STORAGE_KEY = "vinyl-music-player-state-v2";
 const LYRICS_CACHE_KEY = "vinyl-music-player-lyrics-v1";
 const LYRICS_API = "https://lrclib.net/api/search";
 const els = Object.fromEntries([
-  "connection-status", "player-status", "video-frame", "track-title", "track-artist", "queue-position",
+  "connection-status", "player-status", "broadcast-panel", "broadcast-title", "video-frame", "spotify-frame", "spotify-player", "provider-note", "track-title", "track-artist", "queue-position",
   "record", "artwork", "tonearm", "progress", "elapsed", "duration", "play-button",
   "previous-button", "next-button", "shuffle-button", "queue-button", "queue-list", "queue-count",
   "edit-queue-button", "clear-queue-button", "lyrics-tab", "queue-tab", "lyrics-panel", "queue-panel",
   "lyrics-state", "lyrics-state-title", "lyrics-state-note", "lyrics-retry", "lyrics-content", "lyrics-credit",
-  "add-button", "add-dialog", "add-form", "video-url", "video-title", "form-error",
+  "add-button", "add-dialog", "add-form", "video-url", "video-title", "form-error", "confirm-add",
   "install-button", "install-dialog", "style-button", "style-dialog", "style-grid", "toast",
   "keep-awake", "keep-awake-note"
 ].map(id => [id, document.getElementById(id)]));
@@ -31,6 +31,7 @@ let playHistory = tracks[currentIndex] ? [tracks[currentIndex].id] : [];
 let historyIndex = playHistory.length - 1;
 let remainingTrackIds = tracks.filter((_, index) => index !== currentIndex).map(track => track.id);
 let player, deferredInstallPrompt, wakeLock;
+let spotifyApi, spotifyController, spotifyControllerReady = false, spotifyPosition = 0, spotifyDuration = 0;
 let ready = false, playerMostlyVisible = false, pendingPlay = false, isSeeking = false;
 let playerState = -1, needleProgress = 0, recordAngle = 0, rotationFrame = 0, lastRotationTime = 0;
 let needleCandidate = false, draggingNeedle = false, dragStartProgress = 0, dragStartX = 0, dragStartY = 0;
@@ -43,9 +44,12 @@ function loadSavedState() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     const state = JSON.parse(stored || "{}");
-    const validTracks = Array.isArray(state.tracks)
-      ? state.tracks.filter(track => track && /^[\w-]{11}$/.test(track.videoId) && track.title)
-      : [];
+    const validTracks = Array.isArray(state.tracks) ? state.tracks.flatMap(track => {
+      if (!track || !track.title) return [];
+      if (track.provider === "spotify" && /^spotify:(?:track|album|playlist):[A-Za-z0-9]{22}$/.test(track.spotifyUri || "")) return [{ ...track, provider: "spotify" }];
+      if (/^[\w-]{11}$/.test(track.videoId || "")) return [{ ...track, provider: "youtube" }];
+      return [];
+    }) : [];
     return {
       hasState: stored !== null,
       tracks: validTracks,
@@ -79,43 +83,91 @@ window.onYouTubeIframeAPIReady = () => {
   });
 };
 
+window.onSpotifyIframeApiReady = IFrameAPI => {
+  spotifyApi = IFrameAPI;
+  if (currentProvider() === "spotify") ensureSpotifyController();
+};
+
+function currentProvider() { return pendingPlaylistId ? "youtube" : tracks[currentIndex]?.provider === "spotify" ? "spotify" : "youtube"; }
+function activePlayerReady() { return currentProvider() === "spotify" ? spotifyControllerReady : ready; }
+function activeCurrentTime() { return currentProvider() === "spotify" ? spotifyPosition : ready ? Number(player.getCurrentTime?.()) || 0 : 0; }
+function activeDuration() { return currentProvider() === "spotify" ? spotifyDuration : ready ? Number(player.getDuration?.()) || 0 : 0; }
+function seekActive(seconds) {
+  if (currentProvider() === "spotify") spotifyController?.seek(seconds);
+  else if (ready) player.seekTo(seconds, true);
+}
+
+function ensureSpotifyController() {
+  const track = tracks[currentIndex];
+  if (!spotifyApi || spotifyController || track?.provider !== "spotify") return;
+  spotifyApi.createController(els["spotify-player"], { width: "100%", height: 152, uri: track.spotifyUri }, controller => {
+    spotifyController = controller;
+    controller.addListener("ready", () => {
+      spotifyControllerReady = true; updateTransportState();
+      if (currentProvider() === "spotify") {
+        controller.loadEntity(tracks[currentIndex].spotifyUri);
+        setStatus("已就緒", "Spotify 已連線");
+        if (pendingPlay) { pendingPlay = false; controller.resume(); }
+      }
+    });
+    controller.addListener("playback_started", event => {
+      if (currentProvider() !== "spotify") return;
+      const uri = event.data?.playingURI;
+      if (uri) refreshSpotifyMetadata(uri, tracks[currentIndex]);
+      playerState = YT_STATE.PLAYING; setStatus("播放中", "Spotify 播放中"); setPlayingAppearance(true);
+    });
+    controller.addListener("playback_update", event => {
+      if (currentProvider() !== "spotify") return;
+      const state = event.data || {}; spotifyPosition = Number(state.position) / 1000 || 0; spotifyDuration = Number(state.duration) / 1000 || 0;
+      playerState = state.isBuffering ? YT_STATE.BUFFERING : state.isPaused ? YT_STATE.PAUSED : YT_STATE.PLAYING;
+      setPlayingAppearance(playerState === YT_STATE.PLAYING); updateSpotifyProgress();
+      if (playerState === YT_STATE.BUFFERING) setStatus("緩衝中", "Spotify 正在載入");
+      else if (playerState === YT_STATE.PAUSED) setStatus("已暫停", "Spotify 已暫停");
+      else setStatus("播放中", "Spotify 播放中");
+    });
+  });
+}
+
+function setPlayingAppearance(isPlaying) {
+  els["play-button"].classList.toggle("is-playing", isPlaying);
+  els["play-button"].setAttribute("aria-label", isPlaying ? "暫停" : "播放");
+  if (isPlaying) { if (!draggingNeedle) setNeedle(1, true); startRotation(); requestScreenWakeLock(); }
+  else { stopRotation(); releaseScreenWakeLock(); if (!draggingNeedle) setNeedle(0, true); }
+}
+
 function onReady() {
   ready = true;
-  setStatus("已就緒", "點播放或移動唱針");
+  if (currentProvider() === "youtube") setStatus("已就緒", "點播放或移動唱針");
   if (pendingPlaylistId) {
     const method = pendingPlay && playerMostlyVisible ? "loadPlaylist" : "cuePlaylist";
     player[method]({ listType: "playlist", list: pendingPlaylistId, index: pendingPlaylistIndex, startSeconds: 0 });
     if (method === "loadPlaylist") pendingPlay = false;
-  } else if (tracks[currentIndex]) player.cueVideoById(tracks[currentIndex].videoId);
+  } else if (tracks[currentIndex]?.provider !== "spotify") player.cueVideoById(tracks[currentIndex].videoId);
   renderAll();
   updateProgress();
 }
 
 function onStateChange(event) {
+  if (currentProvider() !== "youtube") return;
   playerState = event.data;
   if (pendingPlaylistId) hydratePlaylistQueue();
   syncCurrentMetadata();
   if (event.data === YT_STATE.PLAYING) {
     setStatus("播放中", "YouTube 播放中");
-    els["play-button"].classList.add("is-playing");
-    els["play-button"].setAttribute("aria-label", "暫停");
-    if (!draggingNeedle) setNeedle(1, true);
-    startRotation(); requestScreenWakeLock();
+    setPlayingAppearance(true);
   } else if (event.data === YT_STATE.BUFFERING) {
     setStatus("緩衝中", "正在載入影片"); stopRotation();
   } else if (event.data === YT_STATE.ENDED) {
     stopRotation(); if (!draggingNeedle) setNeedle(0, true); nextTrack(true);
   } else if (event.data === YT_STATE.PAUSED || event.data === YT_STATE.CUED) {
     setStatus("已暫停", "YouTube 已暫停");
-    els["play-button"].classList.remove("is-playing");
-    els["play-button"].setAttribute("aria-label", "播放");
-    stopRotation(); releaseScreenWakeLock();
-    if (!draggingNeedle) setNeedle(0, true);
+    setPlayingAppearance(false);
   }
   updateTransportState();
 }
 
 function onError(event) {
+  if (currentProvider() !== "youtube") return;
   const messages = { 2: "Video ID 無效", 5: "播放器無法載入影片", 100: "影片不存在或已移除", 101: "影片擁有者禁止嵌入", 150: "影片擁有者禁止嵌入", 153: "播放器無法確認網站來源" };
   const message = messages[event.data] || `YouTube 錯誤 ${event.data}`;
   setStatus("無法播放", message); showToast(message); stopRotation(); setNeedle(0, true);
@@ -126,6 +178,16 @@ function haptic(duration = 8) { navigator.vibrate?.(duration); }
 
 function requestPlay() {
   if (!tracks.length && !pendingPlaylistId) return;
+  if (currentProvider() === "spotify") {
+    ensureSpotifyController();
+    if (!spotifyControllerReady) { pendingPlay = true; return; }
+    pendingPlay = false; requestScreenWakeLock();
+    if (spotifyPosition > 0) spotifyController.resume(); else spotifyController.play();
+    setTimeout(() => {
+      if (currentProvider() === "spotify" && playerState !== YT_STATE.PLAYING) showToast("首次播放請點 Spotify 卡片內的播放鍵");
+    }, 1200);
+    return;
+  }
   if (!ready) { pendingPlay = true; return; }
   if (!playerMostlyVisible) {
     pendingPlay = true;
@@ -135,7 +197,12 @@ function requestPlay() {
   pendingPlay = false; requestScreenWakeLock(); player.playVideo();
 }
 
-function requestPause() { pendingPlay = false; if (ready) player.pauseVideo(); stopRotation(); releaseScreenWakeLock(); }
+function requestPause() {
+  pendingPlay = false;
+  if (currentProvider() === "spotify") spotifyController?.pause();
+  else if (ready) player.pauseVideo();
+  setPlayingAppearance(false);
+}
 function togglePlayback() { haptic(); playerState === YT_STATE.PLAYING ? requestPause() : requestPlay(); }
 
 function loadTrack(index, autoplay = false, addToHistory = true) {
@@ -144,6 +211,16 @@ function loadTrack(index, autoplay = false, addToHistory = true) {
   if (shuffleEnabled && addToHistory) recordSelection(tracks[currentIndex].id);
   pendingPlaylistId = null;
   updateTrackDisplay(); setNeedle(0, true); stopRotation(); persistState(); renderQueue(); updateTransportState();
+  spotifyPosition = 0; spotifyDuration = 0; playerState = YT_STATE.PAUSED; setPlayingAppearance(false);
+  if (currentProvider() === "spotify") {
+    if (ready) player.pauseVideo(); ensureSpotifyController();
+    if (!spotifyControllerReady) { pendingPlay = autoplay; return; }
+    spotifyController.loadEntity(tracks[currentIndex].spotifyUri);
+    if (autoplay) spotifyController.play();
+    else spotifyController.pause();
+    return;
+  }
+  spotifyController?.pause();
   if (!ready) { pendingPlay = autoplay; return; }
   if (autoplay && playerMostlyVisible) player.loadVideoById(tracks[currentIndex].videoId);
   else { player.cueVideoById(tracks[currentIndex].videoId); pendingPlay = autoplay; }
@@ -192,6 +269,7 @@ function recordSelection(id) {
 
 function loadYouTubePlaylist(playlistId, autoplay = true) {
   pendingPlaylistId = playlistId; pendingPlaylistIndex = 0; pendingPlay = autoplay;
+  spotifyController?.pause(); showProviderMode("youtube"); setPlayingAppearance(false);
   els["track-title"].textContent = "正在載入播放清單"; els["track-artist"].textContent = "YouTube";
   els["queue-position"].textContent = "PLAYLIST"; els.artwork.src = "./icons/icon-512.png";
   setStatus("載入中", "正在讀取 YouTube 播放清單");
@@ -208,7 +286,7 @@ function hydratePlaylistQueue() {
   currentIndex = Number.isInteger(reportedIndex) && reportedIndex >= 0 ? reportedIndex : 0;
   const data = player.getVideoData?.() || {};
   tracks = ids.map((videoId, index) => ({
-    id: `playlist-${videoId}-${index}`, videoId,
+    id: `playlist-${videoId}-${index}`, provider: "youtube", videoId,
     title: index === currentIndex && data.title ? data.title : `播放清單曲目 ${index + 1}`,
     artist: index === currentIndex && data.author ? data.author : "YouTube 播放清單"
   }));
@@ -241,7 +319,7 @@ function lyricsMetadata(track) {
     title = cleanMediaText(parts.join(" - "));
     if (titleArtist) artist = titleArtist;
   }
-  if (/^(?:YouTube|YouTube 播放清單)$/i.test(artist)) artist = "";
+  if (/^(?:YouTube|YouTube 播放清單|Spotify)$/i.test(artist)) artist = "";
   return { title, artist };
 }
 
@@ -294,11 +372,11 @@ function renderLyricsResult(result) {
       const item = document.createElement("li"), button = document.createElement("button");
       button.type = "button"; button.textContent = line.text; button.dataset.time = String(line.time);
       button.setAttribute("aria-label", `${formatTime(line.time)} ${line.text}`);
-      button.addEventListener("click", () => { if (ready) { player.seekTo(line.time, true); updateLyricsPlayback(line.time); } });
+      button.addEventListener("click", () => { if (activePlayerReady()) { seekActive(line.time); updateLyricsPlayback(line.time); } });
       item.append(button); list.append(item); return { button, time: line.time, index };
     });
     els["lyrics-content"].append(list);
-    updateLyricsPlayback(ready ? player.getCurrentTime?.() || 0 : 0);
+    updateLyricsPlayback(activeCurrentTime());
   } else {
     const paragraph = document.createElement("p"); paragraph.className = "plain-lyrics"; paragraph.textContent = plain;
     els["lyrics-content"].append(paragraph);
@@ -342,7 +420,7 @@ async function loadLyricsForCurrentTrack(force = false) {
       results = await throttledLyricsSearch({ title: metadata.title, artist: "" }, lyricsRequest.signal);
     }
     if (signature !== lyricsSignature) return;
-    const duration = ready ? Number(player.getDuration?.()) || 0 : 0;
+    const duration = activeDuration();
     const result = results.filter(item => item && (item.syncedLyrics || item.plainLyrics || item.instrumental))
       .sort((a, b) => lyricsMatchScore(b, metadata, duration) - lyricsMatchScore(a, metadata, duration))[0] || null;
     lyricsCache[signature] = { savedAt: Date.now(), result }; persistLyricsCache();
@@ -377,17 +455,31 @@ function updateLyricsPlayback(currentTime) {
 function updateTrackDisplay() {
   const track = tracks[currentIndex];
   if (!track) {
+    showProviderMode("youtube");
     els["track-title"].textContent = "播放清單是空的";
     els["track-artist"].textContent = "從右上角加入 YouTube 音樂即可開始";
     els["queue-position"].textContent = "EMPTY"; els.artwork.src = "./icons/icon-512.png";
     els.artwork.alt = "Vinyl Music Player 圖標"; document.title = "Vinyl Music Player";
     lyricsSignature = ""; lyricsRequest?.abort(); setLyricsState("目前沒有歌曲", "加入音樂後會自動搜尋歌詞。"); return;
   }
+  showProviderMode(track.provider === "spotify" ? "spotify" : "youtube");
   els["track-title"].textContent = track.title; els["track-artist"].textContent = track.artist;
-  els["queue-position"].textContent = `${currentIndex + 1} / ${tracks.length}`;
-  els.artwork.src = `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`; els.artwork.alt = `${track.title} 封面`;
+  els["queue-position"].textContent = `${track.provider === "spotify" ? "SPOTIFY · " : ""}${currentIndex + 1} / ${tracks.length}`;
+  els.artwork.src = track.artwork || (track.provider === "spotify" ? "./icons/icon-512.png" : `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`);
+  els.artwork.alt = `${track.title} 封面`;
   document.title = `${track.title} - Vinyl Music Player`;
   scheduleLyricsLookup(track);
+}
+
+function showProviderMode(provider) {
+  const spotify = provider === "spotify";
+  els["broadcast-panel"].classList.toggle("spotify-mode", spotify);
+  els["video-frame"].hidden = spotify; els["spotify-frame"].hidden = !spotify;
+  els["broadcast-title"].textContent = spotify ? "Spotify 播放器" : "YouTube 播放器";
+  els["provider-note"].textContent = spotify
+    ? "無影片的 Spotify 官方播放卡；完整播放會依 Spotify 登入狀態與裝置支援而定。"
+    : "影片保持可見並保留 YouTube 原生控制，不下載或分離音訊。";
+  if (spotify) ensureSpotifyController();
 }
 
 function setNeedle(value, animate = false) {
@@ -414,12 +506,21 @@ function startRotation() {
 function stopRotation() { cancelAnimationFrame(rotationFrame); rotationFrame = 0; els.record.setAttribute("aria-label", "目前停止的黑膠唱片"); }
 
 function updateProgress() {
+  if (currentProvider() === "spotify") { if (!isSeeking) updateSpotifyProgress(); return; }
   if (!document.hidden && ready && player.getDuration && !isSeeking) {
     const total = player.getDuration() || 0, current = player.getCurrentTime() || 0;
     els.progress.max = Math.max(total, 1); els.progress.value = current; els.progress.disabled = total <= 0;
     els.elapsed.textContent = formatTime(current); els.duration.textContent = formatTime(total); updateLyricsPlayback(current);
     els.progress.setAttribute("aria-valuetext", `${formatTime(current)} / ${formatTime(total)}`);
   }
+}
+
+function updateSpotifyProgress() {
+  if (isSeeking) return;
+  els.progress.max = Math.max(spotifyDuration, 1); els.progress.value = spotifyPosition; els.progress.disabled = spotifyDuration <= 0;
+  els.elapsed.textContent = formatTime(spotifyPosition); els.duration.textContent = formatTime(spotifyDuration);
+  els.progress.setAttribute("aria-valuetext", `${formatTime(spotifyPosition)} / ${formatTime(spotifyDuration)}`);
+  updateLyricsPlayback(spotifyPosition);
 }
 
 function formatTime(seconds) {
@@ -486,7 +587,7 @@ function clearQueue() {
 }
 
 function stopEmptyQueue() {
-  pendingPlay = false; requestPause(); if (ready) player.stopVideo(); setNeedle(0, true); persistState(); renderAll();
+  pendingPlay = false; spotifyController?.pause(); if (ready) player.stopVideo(); setPlayingAppearance(false); setNeedle(0, true); persistState(); renderAll();
   els.progress.value = 0; els.progress.disabled = true; els.elapsed.textContent = "0:00"; els.duration.textContent = "0:00";
 }
 
@@ -503,7 +604,7 @@ function renderShuffleState() {
 }
 
 function updateTransportState() {
-  const hasTracks = tracks.length > 0; els["play-button"].disabled = !ready || !hasTracks;
+  const hasTracks = tracks.length > 0; els["play-button"].disabled = !activePlayerReady() || !hasTracks;
   els["previous-button"].disabled = shuffleEnabled ? historyIndex <= 0 : currentIndex <= 0;
   els["next-button"].disabled = shuffleEnabled ? tracks.length <= 1 : !hasTracks || currentIndex >= tracks.length - 1;
 }
@@ -511,7 +612,7 @@ function updateTransportState() {
 function showPanel(panel) {
   const queue = panel === "queue"; els["lyrics-panel"].hidden = queue; els["queue-panel"].hidden = !queue;
   els["lyrics-tab"].setAttribute("aria-selected", String(!queue)); els["queue-tab"].setAttribute("aria-selected", String(queue));
-  if (!queue) { loadLyricsForCurrentTrack(); updateLyricsPlayback(ready ? player.getCurrentTime?.() || 0 : 0); }
+  if (!queue) { loadLyricsForCurrentTrack(); updateLyricsPlayback(activeCurrentTime()); }
   if (queue) els["queue-panel"].scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "nearest" });
 }
 
@@ -546,6 +647,39 @@ function parsePlaylistId(input) {
   try { const id = new URL(value).searchParams.get("list"); return /^[\w-]{10,}$/.test(id || "") ? id : null; } catch { return null; }
 }
 
+function parseSpotifyEntity(input) {
+  const value = input.trim();
+  const uriMatch = value.match(/^spotify:(track|album|playlist):([A-Za-z0-9]{22})$/i);
+  if (uriMatch) return { type: uriMatch[1].toLowerCase(), id: uriMatch[2], uri: `spotify:${uriMatch[1].toLowerCase()}:${uriMatch[2]}` };
+  try {
+    const url = new URL(value), match = url.pathname.match(/^\/(?:intl-[^/]+\/)?(track|album|playlist)\/([A-Za-z0-9]{22})/i);
+    if (!/(^|\.)spotify\.com$/i.test(url.hostname) || !match) return null;
+    return { type: match[1].toLowerCase(), id: match[2], uri: `spotify:${match[1].toLowerCase()}:${match[2]}` };
+  } catch { return null; }
+}
+
+function spotifyPublicUrl(uri) {
+  const [, type, id] = uri.split(":"); return `https://open.spotify.com/${type}/${id}`;
+}
+
+async function fetchSpotifyMetadata(uri) {
+  const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyPublicUrl(uri))}`);
+  if (!response.ok) throw new Error("無法讀取 Spotify 音樂資料。");
+  const data = await response.json();
+  return { title: String(data.title || "Spotify 音樂").trim(), artwork: data.thumbnail_url || "./icons/icon-512.png" };
+}
+
+async function refreshSpotifyMetadata(uri, track) {
+  if (!track || track.provider !== "spotify" || track.playingUri === uri) return;
+  track.playingUri = uri;
+  try {
+    const metadata = await fetchSpotifyMetadata(uri);
+    if (tracks[currentIndex]?.id !== track.id) return;
+    if (!track.customTitle) track.title = metadata.title;
+    track.artwork = metadata.artwork; updateTrackDisplay(); persistState(); renderQueue();
+  } catch { /* The official player remains usable without oEmbed metadata. */ }
+}
+
 async function requestScreenWakeLock() {
   if (!els["keep-awake"].checked || wakeLock || !("wakeLock" in navigator) || document.hidden) return;
   try {
@@ -578,19 +712,33 @@ els["clear-queue-button"].addEventListener("click", clearQueue);
 els["style-button"].addEventListener("click", () => { if (!els["style-dialog"].open) els["style-dialog"].show(); });
 els["style-dialog"].addEventListener("close", () => els["style-button"].focus());
 els["add-button"].addEventListener("click", () => { requestPause(); els["form-error"].textContent = ""; els["add-dialog"].showModal(); });
-els["add-form"].addEventListener("submit", event => {
+els["add-form"].addEventListener("submit", async event => {
   if (event.submitter?.value !== "default") return; event.preventDefault();
+  const spotify = parseSpotifyEntity(els["video-url"].value);
+  if (spotify) {
+    els["confirm-add"].disabled = true; els["confirm-add"].textContent = "正在讀取 Spotify…"; els["form-error"].textContent = "";
+    try {
+      const metadata = await fetchSpotifyMetadata(spotify.uri), customTitle = els["video-title"].value.trim();
+      tracks.push({
+        id: globalThis.crypto?.randomUUID?.() || `spotify-${Date.now()}`, provider: "spotify", spotifyUri: spotify.uri,
+        title: customTitle || metadata.title, artist: "Spotify", artwork: metadata.artwork, customTitle: Boolean(customTitle)
+      });
+      els["add-dialog"].close(); els["add-form"].reset(); loadTrack(tracks.length - 1, true);
+    } catch (error) { els["form-error"].textContent = error.message || "Spotify 網址無法讀取。"; }
+    finally { els["confirm-add"].disabled = false; els["confirm-add"].textContent = "加入並播放"; }
+    return;
+  }
   const playlistId = parsePlaylistId(els["video-url"].value);
   if (playlistId) { els["add-dialog"].close(); els["add-form"].reset(); loadYouTubePlaylist(playlistId, true); return; }
   const videoId = parseVideoId(els["video-url"].value);
-  if (!videoId) { els["form-error"].textContent = "請輸入有效的 YouTube 單曲或播放清單網址。"; return; }
-  tracks.push({ id: globalThis.crypto?.randomUUID?.() || `track-${Date.now()}`, videoId, title: els["video-title"].value.trim() || "YouTube 影片", artist: "YouTube" });
+  if (!videoId) { els["form-error"].textContent = "請輸入有效的 YouTube 或 Spotify 網址。"; return; }
+  tracks.push({ id: globalThis.crypto?.randomUUID?.() || `track-${Date.now()}`, provider: "youtube", videoId, title: els["video-title"].value.trim() || "YouTube 影片", artist: "YouTube" });
   els["add-dialog"].close(); els["add-form"].reset(); loadTrack(tracks.length - 1, true);
 });
 
 els.progress.addEventListener("pointerdown", () => { isSeeking = true; });
 els.progress.addEventListener("input", () => { els.elapsed.textContent = formatTime(Number(els.progress.value)); });
-els.progress.addEventListener("change", () => { if (ready) player.seekTo(Number(els.progress.value), true); isSeeking = false; });
+els.progress.addEventListener("change", () => { if (activePlayerReady()) seekActive(Number(els.progress.value)); isSeeking = false; });
 
 els.tonearm.addEventListener("pointerdown", event => {
   needleCandidate = true; draggingNeedle = false; dragStartProgress = needleProgress; dragStartX = event.clientX; dragStartY = event.clientY;
@@ -623,7 +771,10 @@ new IntersectionObserver(entries => {
   } else if (playerMostlyVisible && pendingPlay) requestPlay();
 }, { threshold: [.5] }).observe(els["video-frame"]);
 
-document.addEventListener("visibilitychange", () => { if (document.hidden) requestPause(); });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) return;
+  if (currentProvider() === "youtube") requestPause(); else releaseScreenWakeLock();
+});
 els["keep-awake"].addEventListener("change", () => els["keep-awake"].checked && playerState === YT_STATE.PLAYING ? requestScreenWakeLock() : releaseScreenWakeLock());
 reduceMotion.addEventListener("change", () => reduceMotion.matches ? stopRotation() : playerState === YT_STATE.PLAYING && startRotation());
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); deferredInstallPrompt = event; });
@@ -640,3 +791,5 @@ if (!("wakeLock" in navigator)) {
 renderAll(); setInterval(updateProgress, 500);
 const youtubeAPI = document.createElement("script"); youtubeAPI.src = "https://www.youtube.com/iframe_api";
 youtubeAPI.onerror = () => setStatus("無法連線", "請檢查網路後重新整理頁面"); document.head.append(youtubeAPI);
+const spotifyAPI = document.createElement("script"); spotifyAPI.src = "https://open.spotify.com/embed/iframe-api/v1";
+spotifyAPI.onerror = () => { if (currentProvider() === "spotify") setStatus("無法連線", "Spotify 播放器載入失敗"); }; document.head.append(spotifyAPI);
